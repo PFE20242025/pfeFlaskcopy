@@ -5,10 +5,13 @@ resources:
 - repo: self
 
 variables:
-  group: docker-credentials
-  imageName: 'my-flask-app'
-  tag: 'latest'
+- group: docker-credentials  # Ce groupe doit contenir DOCKER_USERNAME et DOCKER_PASSWORD
 
+- name: imageName
+  value: 'my-flask-app'
+
+- name: tag
+  value: 'latest'
 
 stages:
 - stage: BuildAndPush
@@ -19,6 +22,10 @@ stages:
     pool:
       vmImage: ubuntu-latest
     steps:
+    - script: |
+        echo "$(DOCKER_PASSWORD)" | docker login -u "$(DOCKER_USERNAME)" --password-stdin
+      displayName: Docker Hub Login
+
     - task: Docker@2
       displayName: Build Docker image
       inputs:
@@ -28,10 +35,6 @@ stages:
         tags: |
           $(tag)
 
-    - script: |
-        echo "$(DOCKER_PASSWORD)" | docker login -u "$(DOCKER_USERNAME)" --password-stdin
-      displayName: Docker Hub Login
-
     - task: Docker@2
       displayName: Push Docker image to Docker Hub
       inputs:
@@ -39,3 +42,4 @@ stages:
         repository: $(DOCKER_USERNAME)/$(imageName)
         tags: |
           $(tag)
+
