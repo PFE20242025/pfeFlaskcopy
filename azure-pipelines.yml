@@ -3,6 +3,7 @@ trigger:
 
 resources:
 - repo: self
+
 variables:
   - group: docker-credentials  # Make sure you have DOCKER_USERNAME and DOCKER_PASSWORD stored
   imageName: 'my-flask-app'
