@@ -5,9 +5,10 @@ resources:
 - repo: self
 
 variables:
-  - group: docker-credentials  # Make sure you have DOCKER_USERNAME and DOCKER_PASSWORD stored
+  group: docker-credentials
   imageName: 'my-flask-app'
-  tag: 'latest'  # or $(Build.BuildId) if you want unique versioning
+  tag: 'latest'
+
 
 stages:
 - stage: BuildAndPush
