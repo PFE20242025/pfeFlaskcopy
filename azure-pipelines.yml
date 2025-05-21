@@ -24,7 +24,7 @@ stages:
     steps:
     - script: |
         echo "$(DOCKER_PASSWORD)" | docker login -u "$(DOCKER_USERNAME)" --password-stdin
-      displayName: Docker Hub Login
+      displayName: Docker Hub login
 
     - task: Docker@2
       displayName: Build Docker image
