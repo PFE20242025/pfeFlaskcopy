@@ -1,0 +1,38 @@
+trigger:
+- main
+
+resources:
+- repo: self
+
+variables:
+  imageName: 'my-flask-app'
+  tag: '$(Build.BuildId)'
+  tarFile: '$(Build.ArtifactStagingDirectory)/my-flask-app.tar.gz'
+
+stages:
+- stage: Build
+  displayName: Build and export Docker image
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: Docker@2
+      displayName: Build Docker image
+      inputs:
+        command: build
+        dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        repository: $(imageName)
+        tags: |
+          $(tag)
+
+    - script: |
+        docker save $(imageName):$(tag) | gzip > $(tarFile)
+      displayName: Save image as tar.gz
+
+    - task: PublishBuildArtifacts@1
+      displayName: Publish image archive
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'docker-image'
