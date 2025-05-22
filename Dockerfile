@@ -19,5 +19,5 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 EXPOSE 5000 11434
 
 # Start Ollama server in background, then launch Flask app with gunicorn
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:5000 app:app && ollama serve && ollama pull phi3"]
+CMD sh -c "ollama serve & sleep 10 && ollama pull phi3 && gunicorn --bind 0.0.0.0:5000 --timeout 120 --workers 1 app:app"
 
