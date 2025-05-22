@@ -22,4 +22,8 @@ RUN ollama pull phi3
 EXPOSE 5000 11434
 
 # Start Ollama server in background, then launch Flask app with gunicorn
-CMD ollama serve & gunicorn --bind 0.0.0.0:5000 app:app
+CMD sh -c "ollama serve & \
+           sleep 60 && \
+           ollama pull phi3 && \
+           gunicorn --bind 0.0.0.0:5000 app:app"
+
