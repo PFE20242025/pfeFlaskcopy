@@ -15,9 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install Ollama CLI using official install script
 RUN curl -fsSL https://ollama.com/install.sh | sh
 
-# Pull phi3 model into Ollama
-RUN ollama pull phi3
-
 # Expose Flask port and Ollama API port
 EXPOSE 5000 11434
 
