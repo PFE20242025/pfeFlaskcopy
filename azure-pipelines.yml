@@ -11,7 +11,7 @@ resources:
 variables:
   # Container registry service connection established during pipeline creation
   dockerRegistryServiceConnection: '386ed423-ad95-4924-816d-c249f0b2d97f'
-  imageRepository: 'pfepfeflaskcopy'
+  imageRepository: 'pfeflaskcopy'
   containerRegistry: 'pfeflaskdockercontainerregistry.azurecr.io'
   dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
   tag: '$(Build.BuildId)'
