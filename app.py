@@ -3,9 +3,8 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from expense_advisor import ExpenseAdvisor  # Make sure this import works correctly
 
-# Initialize Flask app
-device = 0 if torch.cuda.is_available() else -1  # Utiliser 0 pour le GPU, -1 pour CPU
-print(f"CUDA available: {torch.cuda.is_available()}")
+
+
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization"]}})
@@ -44,6 +43,6 @@ def generate_advice():
     return Response(advisor.generate_advice_stream(expenses, language, tone), 
                    mimetype='text/plain')
 
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
-
