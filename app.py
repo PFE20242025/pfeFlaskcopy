@@ -44,5 +44,6 @@ def generate_advice():
     return Response(advisor.generate_advice_stream(expenses, language, tone), 
                    mimetype='text/plain')
 
-
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
 
