@@ -1,7 +1,7 @@
 # app.py
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-from expense_advisor import ExpenseAdvisor  # Make sure this import works correctly
+from expense_advisor import ExpenseAdvisor  
 
 
 
