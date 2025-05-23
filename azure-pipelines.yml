@@ -32,16 +32,3 @@ stages:
         dockerfile: $(dockerfilePath)
         containerRegistry: $(dockerRegistryServiceConnection)
         tags: latest
-
-- stage: RunContainer
-  displayName: Run Docker container with memory limit
-  jobs:
-  - job: Run
-    displayName: Run container with 6GB memory limit
-    pool:
-      vmImage: $(vmImageName)
-    steps:
-    - script: |
-        echo "Running Docker container with memory limit..."
-        docker run --memory="6g" --memory-swap="6g" -p 5000:5000 -p 11434:11434 $(containerRegistry)/$(imageRepository):latest
-      displayName: 'Run Docker container with memory limits'
