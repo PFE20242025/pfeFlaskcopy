@@ -1,12 +1,7 @@
 # app.py
 from flask import Flask, request, jsonify, Response
-from transformers import pipeline
 from flask_cors import CORS
 from expense_advisor import ExpenseAdvisor  # Make sure this import works correctly
-import torch
-from sklearn.preprocessing import StandardScaler
-import pickle
-import numpy as np
 
 # Initialize Flask app
 device = 0 if torch.cuda.is_available() else -1  # Utiliser 0 pour le GPU, -1 pour CPU
