@@ -1,4 +1,9 @@
 flask
 gunicorn
 flask-cors
+transformers
+torch
+scikit-learn
+numpy
 requests
+catboost
