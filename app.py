@@ -73,7 +73,7 @@ def generate_advice():
     print(f"[Route] Processing {len(expenses)} expenses with language={language}, tone={tone}")
     
     # Send the stream response
-    return Response(advisor.generate_advice_stream(expenses, language, tone), 
+    return Response(advisor.generate_advice(expenses, language, tone), 
                    mimetype='text/plain')
 
 # Model for expense prediction
