@@ -60,6 +60,30 @@ class ExpenseAdvisor:
             "stream": True
         }
 
+    def generate_advice(self, expenses, language="english", tone="formal"):
+        messages = self.build_messages(expenses, language, tone)
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "stream": False 
+        }
+    try:
+        response = requests.post(self.ollama_url, json=payload)
+        if response.status_code == 200:
+            data = response.json()
+            # Assuming the full content is in: data['choices'][0]['message']['content']
+            # (adjust this based on your actual API response structure)
+            full_content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            # Remove any markdown fences if present
+            if full_content.startswith("```html"):
+                full_content = full_content.replace("```html", "").rstrip("```").strip()
+            return full_content
+        else:
+            return f"Error: {response.status_code} - {response.text}"
+    except Exception as e:
+        return f"Connection error: {str(e)}"
+
+
         def stream_response():
             inside_think_block = False
             first_chunk_skipped = False  # Flag to fix the first bad piece
