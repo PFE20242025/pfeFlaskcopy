@@ -137,18 +137,12 @@ def generate_advice():
         
         logger.info(f"Processing {len(expenses)} expenses with language={language}, tone={tone}")
         
-        # Get advisor and generate advice
+        # Get advisor
         advisor = get_advisor()
         
-        def cleanup_generator():
-            try:
-                for chunk in advisor.generate_advice(expenses, language, tone):
-                    yield chunk
-            finally:
-                # Force cleanup after streaming
-                gc.collect()
-        
-        return Response(cleanup_generator(), mimetype='text/plain')
+        # NON-STREAMING VERSION - Returns complete response at once
+        advice_html = advisor.generate_advice(expenses, language, tone)
+        return Response(advice_html, mimetype='text/html')
         
     except Exception as e:
         logger.error(f"Error in generate_advice endpoint: {str(e)}")
