@@ -99,7 +99,7 @@ class ExpenseAdvisor:
             raise
     
     def generate_advice_stream(self, expenses, language="english", tone="formal"):
-        """Generate streaming advice with improved error handling and cleanup"""
+        """Generate streaming advice with improved error handling and cleanup - NO TIMEOUTS"""
         logger.info(f"Generating streaming advice with language: {language}, tone: {tone}")
         
         with self.cleanup_context():
@@ -120,11 +120,11 @@ class ExpenseAdvisor:
                     response = None
                     
                     try:
+                        # REMOVED TIMEOUT - Will wait indefinitely for response
                         response = session.post(
                             self.ollama_url, 
                             json=payload, 
-                            stream=True,
-                            timeout=(30, 60)  # (connection timeout, read timeout)
+                            stream=True
                         )
                         
                         if response.status_code != 200:
@@ -177,10 +177,6 @@ class ExpenseAdvisor:
                                 logger.error(f"Error processing stream chunk: {str(e)}")
                                 yield f"\n[Streaming Error]: {str(e)}\n"
                                 
-                    except requests.exceptions.Timeout:
-                        error_msg = "Request timeout - the AI service is taking too long to respond"
-                        logger.error(error_msg)
-                        yield f"<body><h3>Timeout</h3><p>{error_msg}</p></body>"
                     except requests.exceptions.ConnectionError:
                         error_msg = "Connection error - unable to reach the AI service"
                         logger.error(error_msg)
@@ -203,7 +199,7 @@ class ExpenseAdvisor:
                 return error_response()
     
     def generate_advice(self, expenses, language="english", tone="formal"):
-        """Generate non-streaming advice with improved error handling"""
+        """Generate non-streaming advice with improved error handling - NO TIMEOUTS"""
         logger.info(f"Generating advice with language: {language}, tone: {tone}")
         
         with self.cleanup_context():
@@ -218,10 +214,10 @@ class ExpenseAdvisor:
                 
                 session = self.get_session()
                 
+                # REMOVED TIMEOUT - Will wait indefinitely for response
                 response = session.post(
                     self.ollama_url, 
-                    json=payload,
-                    timeout=(30, 120)  # Longer timeout for non-streaming
+                    json=payload
                 )
                 
                 if response.status_code == 200:
@@ -243,10 +239,6 @@ class ExpenseAdvisor:
                     logger.error(error_msg)
                     return f"<body><h3>Error</h3><p>{error_msg}</p></body>"
                     
-            except requests.exceptions.Timeout:
-                error_msg = "Request timeout - the AI service is taking too long to respond"
-                logger.error(error_msg)
-                return f"<body><h3>Timeout</h3><p>{error_msg}</p></body>"
             except requests.exceptions.ConnectionError:
                 error_msg = "Connection error - unable to reach the AI service"
                 logger.error(error_msg)
