@@ -113,85 +113,99 @@ def predict():
 
 @app.route('/generate_advice', methods=['POST'])
 def generate_advice():
+    """Generate complete advice response (non-streaming)"""
     try:
+        logger.info("Received request for generate_advice")
+        
+        # Validate JSON data
         data = request.get_json()
         if not data:
+            logger.error("No JSON data provided")
             return jsonify({"error": "No JSON data provided."}), 400
-            
-        expenses = data.get('expenses', [])
         
-        # Ensure language and tone have default values if not provided
+        # Extract parameters
+        expenses = data.get('expenses', [])
         language = data.get('language', "english")
         tone = data.get('tone', "formal")
         
-        logger.info(f"Request received with language: {language}, tone: {tone}")
+        logger.info(f"Request params - Language: {language}, Tone: {tone}, Expenses count: {len(expenses) if expenses else 0}")
         
+        # Validate expenses
         if not expenses or not isinstance(expenses, list):
             return jsonify({"error": "Please provide a list of expenses."}), 400
         
-        # Convert expenses to strings and validate
+        # Clean and validate expenses
         expenses = [str(expense).strip() for expense in expenses if str(expense).strip()]
-        
         if not expenses:
             return jsonify({"error": "Please provide valid expenses."}), 400
         
-        logger.info(f"Processing {len(expenses)} expenses with language={language}, tone={tone}")
+        logger.info(f"Processing {len(expenses)} valid expenses")
         
-        # Get advisor
+        # Generate advice
         advisor = get_advisor()
-        
-        # NON-STREAMING VERSION - Returns complete response at once
         advice_html = advisor.generate_advice(expenses, language, tone)
+        
+        logger.info("Successfully generated advice")
         return Response(advice_html, mimetype='text/html')
         
     except Exception as e:
-        logger.error(f"Error in generate_advice endpoint: {str(e)}")
-        return jsonify({"error": "Internal server error"}), 500
-    
+        logger.error(f"Error in generate_advice endpoint: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
 @app.route('/generate_advice_stream', methods=['POST'])
 def generate_advice_stream():
+    """Generate streaming advice response"""
     try:
+        logger.info("Received request for generate_advice_stream")
+        
+        # Validate JSON data
         data = request.get_json()
         if not data:
+            logger.error("No JSON data provided")
             return jsonify({"error": "No JSON data provided."}), 400
-            
-        expenses = data.get('expenses', [])
         
-        # Ensure language and tone have default values if not provided
+        # Extract parameters
+        expenses = data.get('expenses', [])
         language = data.get('language', "english")
         tone = data.get('tone', "formal")
         
-        logger.info(f"Streaming request received with language: {language}, tone: {tone}")
+        logger.info(f"Streaming request params - Language: {language}, Tone: {tone}, Expenses count: {len(expenses) if expenses else 0}")
         
+        # Validate expenses
         if not expenses or not isinstance(expenses, list):
             return jsonify({"error": "Please provide a list of expenses."}), 400
         
-        # Convert expenses to strings and validate
+        # Clean and validate expenses
         expenses = [str(expense).strip() for expense in expenses if str(expense).strip()]
-        
         if not expenses:
             return jsonify({"error": "Please provide valid expenses."}), 400
         
-        logger.info(f"Processing {len(expenses)} expenses for streaming with language={language}, tone={tone}")
+        logger.info(f"Processing {len(expenses)} valid expenses for streaming")
         
-        # Get advisor
+        # Generate streaming advice
         advisor = get_advisor()
         
-        # STREAMING VERSION - Returns generator for real-time streaming
         def cleanup_generator():
             try:
+                chunk_count = 0
                 for chunk in advisor.generate_advice_stream(expenses, language, tone):
+                    chunk_count += 1
                     yield chunk
+                logger.info(f"Streaming completed with {chunk_count} chunks")
+            except Exception as e:
+                logger.error(f"Error in streaming generator: {str(e)}")
+                yield f"<body><h3>Streaming Error</h3><p>{str(e)}</p></body>"
             finally:
-                # Force cleanup after streaming
                 gc.collect()
         
         return Response(cleanup_generator(), mimetype='text/html')
         
     except Exception as e:
-        logger.error(f"Error in generate_advice_stream endpoint: {str(e)}")
-        return jsonify({"error": "Internal server error"}), 500
+        logger.error(f"Error in generate_advice_stream endpoint: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+    
+
+
 
 @app.route('/predict_expense/<income>/<int:bedrooms>/<int:vehicles>/<int:members>/<int:employed>', methods=['GET'])
 def predict_expense(income, bedrooms, vehicles, members, employed):

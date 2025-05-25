@@ -4,30 +4,43 @@ import json
 import time
 import gc
 import logging
+import os
 from contextlib import contextmanager
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 class ExpenseAdvisor:
     def __init__(self):
-        self.ollama_url = "http://20.169.88.121:11434/api/chat"
-        self.model_name = "phi3"
+        # Use environment variable for Ollama URL in Azure
+        self.ollama_url = os.getenv('OLLAMA_URL', "http://20.169.88.121:11434/api/chat")
+        self.model_name = os.getenv('MODEL_NAME', "phi3")
         self.session = None
+        logger.info(f"ExpenseAdvisor initialized with URL: {self.ollama_url}")
         
     def get_session(self):
         """Get or create a requests session for connection pooling"""
         if self.session is None:
             self.session = requests.Session()
-            # Set connection pool settings
+            # Increased settings for Azure Container Apps
             adapter = requests.adapters.HTTPAdapter(
-                pool_connections=1,
-                pool_maxsize=2,
-                max_retries=3
+                pool_connections=5,
+                pool_maxsize=10,
+                max_retries=5
             )
             self.session.mount('http://', adapter)
             self.session.mount('https://', adapter)
+            
+            # Set headers for better compatibility
+            self.session.headers.update({
+                'User-Agent': 'ExpenseAdvisor/1.0',
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            })
         return self.session
     
     @contextmanager
@@ -37,6 +50,19 @@ class ExpenseAdvisor:
             yield
         finally:
             gc.collect()
+    
+    def test_connection(self):
+        """Test connection to Ollama service"""
+        try:
+            session = self.get_session()
+            # Simple test request
+            test_url = self.ollama_url.replace('/api/chat', '/api/tags')
+            response = session.get(test_url, timeout=10)
+            logger.info(f"Connection test: {response.status_code}")
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"Connection test failed: {str(e)}")
+            return False
     
     def build_messages(self, expenses, language, tone):
         """Build messages with improved validation and cleanup"""
@@ -99,8 +125,15 @@ class ExpenseAdvisor:
             raise
     
     def generate_advice_stream(self, expenses, language="english", tone="formal"):
-        """Generate streaming advice with improved error handling and cleanup - NO TIMEOUTS"""
+        """Generate streaming advice - Azure Container Compatible"""
         logger.info(f"Generating streaming advice with language: {language}, tone: {tone}")
+        
+        # Test connection first
+        if not self.test_connection():
+            logger.error("Connection test failed before streaming")
+            def error_response():
+                yield f"<body><h3>Connection Error</h3><p>Unable to connect to AI service</p></body>"
+            return error_response()
         
         with self.cleanup_context():
             try:
@@ -118,14 +151,17 @@ class ExpenseAdvisor:
                     inside_think_block = False
                     first_chunk_skipped = False
                     response = None
+                    chunk_count = 0
                     
                     try:
-                        # REMOVED TIMEOUT - Will wait indefinitely for response
+                        logger.info("Starting streaming request...")
                         response = session.post(
                             self.ollama_url, 
                             json=payload, 
                             stream=True
                         )
+                        
+                        logger.info(f"Stream response status: {response.status_code}")
                         
                         if response.status_code != 200:
                             error_msg = f"API Error: {response.status_code} - {response.text}"
@@ -136,6 +172,10 @@ class ExpenseAdvisor:
                         for line in response.iter_lines(decode_unicode=True):
                             if not line:
                                 continue
+                            
+                            chunk_count += 1
+                            if chunk_count % 10 == 0:
+                                logger.info(f"Processed {chunk_count} chunks")
                                 
                             try:
                                 if isinstance(line, bytes):
@@ -176,9 +216,11 @@ class ExpenseAdvisor:
                             except Exception as e:
                                 logger.error(f"Error processing stream chunk: {str(e)}")
                                 yield f"\n[Streaming Error]: {str(e)}\n"
+                        
+                        logger.info(f"Streaming completed. Total chunks: {chunk_count}")
                                 
-                    except requests.exceptions.ConnectionError:
-                        error_msg = "Connection error - unable to reach the AI service"
+                    except requests.exceptions.ConnectionError as e:
+                        error_msg = f"Connection error - unable to reach the AI service: {str(e)}"
                         logger.error(error_msg)
                         yield f"<body><h3>Connection Error</h3><p>{error_msg}</p></body>"
                     except Exception as e:
@@ -199,8 +241,13 @@ class ExpenseAdvisor:
                 return error_response()
     
     def generate_advice(self, expenses, language="english", tone="formal"):
-        """Generate non-streaming advice with improved error handling - NO TIMEOUTS"""
+        """Generate non-streaming advice - Azure Container Compatible"""
         logger.info(f"Generating advice with language: {language}, tone: {tone}")
+        
+        # Test connection first
+        if not self.test_connection():
+            logger.error("Connection test failed before generating advice")
+            return "<body><h3>Connection Error</h3><p>Unable to connect to AI service</p></body>"
         
         with self.cleanup_context():
             try:
@@ -214,11 +261,13 @@ class ExpenseAdvisor:
                 
                 session = self.get_session()
                 
-                # REMOVED TIMEOUT - Will wait indefinitely for response
+                logger.info("Sending non-streaming request...")
                 response = session.post(
                     self.ollama_url, 
                     json=payload
                 )
+                
+                logger.info(f"Non-streaming response status: {response.status_code}")
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -227,20 +276,22 @@ class ExpenseAdvisor:
                     full_content = data.get('message', {}).get('content', '')
                     
                     if not full_content:
+                        logger.error("No content received from AI service")
                         return "<body><h3>Error</h3><p>No content received from AI service</p></body>"
                     
                     # Clean markdown fences
                     if full_content.startswith("```html"):
                         full_content = full_content.replace("```html", "").rstrip("```").strip()
                     
+                    logger.info(f"Generated advice length: {len(full_content)} characters")
                     return full_content
                 else:
                     error_msg = f"API Error: {response.status_code} - {response.text}"
                     logger.error(error_msg)
                     return f"<body><h3>Error</h3><p>{error_msg}</p></body>"
                     
-            except requests.exceptions.ConnectionError:
-                error_msg = "Connection error - unable to reach the AI service"
+            except requests.exceptions.ConnectionError as e:
+                error_msg = f"Connection error - unable to reach the AI service: {str(e)}"
                 logger.error(error_msg)
                 return f"<body><h3>Connection Error</h3><p>{error_msg}</p></body>"
             except Exception as e:
