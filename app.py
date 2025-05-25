@@ -147,6 +147,51 @@ def generate_advice():
     except Exception as e:
         logger.error(f"Error in generate_advice endpoint: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500
+    
+
+@app.route('/generate_advice_stream', methods=['POST'])
+def generate_advice_stream():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided."}), 400
+            
+        expenses = data.get('expenses', [])
+        
+        # Ensure language and tone have default values if not provided
+        language = data.get('language', "english")
+        tone = data.get('tone', "formal")
+        
+        logger.info(f"Streaming request received with language: {language}, tone: {tone}")
+        
+        if not expenses or not isinstance(expenses, list):
+            return jsonify({"error": "Please provide a list of expenses."}), 400
+        
+        # Convert expenses to strings and validate
+        expenses = [str(expense).strip() for expense in expenses if str(expense).strip()]
+        
+        if not expenses:
+            return jsonify({"error": "Please provide valid expenses."}), 400
+        
+        logger.info(f"Processing {len(expenses)} expenses for streaming with language={language}, tone={tone}")
+        
+        # Get advisor
+        advisor = get_advisor()
+        
+        # STREAMING VERSION - Returns generator for real-time streaming
+        def cleanup_generator():
+            try:
+                for chunk in advisor.generate_advice_stream(expenses, language, tone):
+                    yield chunk
+            finally:
+                # Force cleanup after streaming
+                gc.collect()
+        
+        return Response(cleanup_generator(), mimetype='text/html')
+        
+    except Exception as e:
+        logger.error(f"Error in generate_advice_stream endpoint: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/predict_expense/<income>/<int:bedrooms>/<int:vehicles>/<int:members>/<int:employed>', methods=['GET'])
 def predict_expense(income, bedrooms, vehicles, members, employed):
