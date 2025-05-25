@@ -13,9 +13,11 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Ollama CLI using official install script
+RUN curl -fsSL https://ollama.com/install.sh | sh
 
+ENV OLLAMA_HOST=0.0.0.0:11434
 # Expose Flask port and Ollama API port
-EXPOSE 5000 
+EXPOSE 5000 11434
 
 # Start Ollama server in background, then launch Flask app with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+CMD sh -c "ollama serve & sleep 10 && ollama pull phi3 && gunicorn --bind 0.0.0.0:5000 app:app"
