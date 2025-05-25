@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class ExpenseAdvisor:
     def __init__(self):
-        self.ollama_url = "http://localhost:11434/api/chat"
+        self.ollama_url = "http://20.169.88.121:11434/api/chat"
         self.model_name = "phi3"
         self.session = None
         
