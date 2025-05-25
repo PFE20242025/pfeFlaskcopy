@@ -142,7 +142,7 @@ def generate_advice():
         
         def cleanup_generator():
             try:
-                for chunk in advisor.generate_advice_stream(expenses, language, tone):
+                for chunk in advisor.generate_advice(expenses, language, tone):
                     yield chunk
             finally:
                 # Force cleanup after streaming
