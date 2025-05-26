@@ -26,11 +26,11 @@ class ExpenseAdvisor:
         """Get or create a requests session for connection pooling"""
         if self.session is None:
             self.session = requests.Session()
-            # Increased settings for Azure Container Apps
+            # Increased settings for Azure Container Apps with longer timeouts
             adapter = requests.adapters.HTTPAdapter(
-                pool_connections=5,
-                pool_maxsize=10,
-                max_retries=5
+                pool_connections=10,
+                pool_maxsize=20,
+                max_retries=3
             )
             self.session.mount('http://', adapter)
             self.session.mount('https://', adapter)
@@ -39,7 +39,8 @@ class ExpenseAdvisor:
             self.session.headers.update({
                 'User-Agent': 'ExpenseAdvisor/1.0',
                 'Accept': 'application/json',
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Connection': 'keep-alive'
             })
         return self.session
     
@@ -55,9 +56,9 @@ class ExpenseAdvisor:
         """Test connection to Ollama service"""
         try:
             session = self.get_session()
-            # Simple test request
+            # Simple test request with timeout
             test_url = self.ollama_url.replace('/api/chat', '/api/tags')
-            response = session.get(test_url, timeout=10)
+            response = session.get(test_url, timeout=15)
             logger.info(f"Connection test: {response.status_code}")
             return response.status_code == 200
         except Exception as e:
@@ -125,7 +126,7 @@ class ExpenseAdvisor:
             raise
     
     def generate_advice_stream(self, expenses, language="english", tone="formal"):
-        """Generate streaming advice - Azure Container Compatible"""
+        """Generate streaming advice - Fixed for Azure Container Apps with better error handling"""
         logger.info(f"Generating streaming advice with language: {language}, tone: {tone}")
         
         # Test connection first
@@ -142,7 +143,12 @@ class ExpenseAdvisor:
                 payload = {
                     "model": self.model_name,
                     "messages": messages,
-                    "stream": True
+                    "stream": True,
+                    "options": {
+                        "temperature": 0.7,
+                        "top_p": 0.9,
+                        "num_predict": 2048  # Limit response length to prevent timeouts
+                    }
                 }
                 
                 session = self.get_session()
@@ -152,29 +158,55 @@ class ExpenseAdvisor:
                     first_chunk_skipped = False
                     response = None
                     chunk_count = 0
+                    accumulated_content = ""
+                    last_activity_time = time.time()
+                    timeout_threshold = 120  # 2 minutes timeout
                     
                     try:
                         logger.info("Starting streaming request...")
+                        
+                        # Use longer timeout and chunk size for Azure
                         response = session.post(
                             self.ollama_url, 
                             json=payload, 
-                            stream=True
+                            stream=True,
+                            timeout=(30, 120),  # (connect_timeout, read_timeout)
+                            headers={'Connection': 'keep-alive'}
                         )
                         
                         logger.info(f"Stream response status: {response.status_code}")
                         
                         if response.status_code != 200:
-                            error_msg = f"API Error: {response.status_code} - {response.text}"
+                            error_msg = f"API Error: {response.status_code}"
+                            if response.text:
+                                error_msg += f" - {response.text[:200]}"
                             logger.error(error_msg)
                             yield f"<body><h3>Error</h3><p>{error_msg}</p></body>"
                             return
                         
-                        for line in response.iter_lines(decode_unicode=True):
+                        # Start with opening body tag if not present
+                        yield_started = False
+                        
+                        for line in response.iter_lines(decode_unicode=True, chunk_size=1024):
+                            current_time = time.time()
+                            
+                            # Check for timeout
+                            if current_time - last_activity_time > timeout_threshold:
+                                logger.warning("Stream timeout detected")
+                                if not yield_started:
+                                    yield f"<body><h3>Timeout</h3><p>Response generation timed out</p></body>"
+                                else:
+                                    yield f"\n<p><em>Response generation timed out</em></p></body>"
+                                break
+                            
                             if not line:
                                 continue
                             
+                            last_activity_time = current_time
                             chunk_count += 1
-                            if chunk_count % 10 == 0:
+                            
+                            # Log progress every 20 chunks
+                            if chunk_count % 20 == 0:
                                 logger.info(f"Processed {chunk_count} chunks")
                                 
                             try:
@@ -183,6 +215,17 @@ class ExpenseAdvisor:
                                     
                                 chunk = json.loads(line)
                                 content_piece = chunk.get('message', {}).get('content', '')
+                                
+                                # Check if stream is done
+                                if chunk.get('done', False):
+                                    logger.info("Stream marked as done by server")
+                                    if not yield_started:
+                                        yield f"<body><h3>Error</h3><p>No content received</p></body>"
+                                    else:
+                                        # Ensure proper closing
+                                        if not accumulated_content.rstrip().endswith('</body>'):
+                                            yield "</body>"
+                                    break
                                 
                                 if not content_piece:
                                     continue
@@ -208,6 +251,17 @@ class ExpenseAdvisor:
                                 if content_piece.endswith('```'):
                                     content_piece = content_piece.rstrip('```').rstrip()
                                 
+                                # Accumulate content for tracking
+                                accumulated_content += content_piece
+                                
+                                # Ensure we start with body tag
+                                if not yield_started and content_piece.strip():
+                                    if not content_piece.startswith('<body'):
+                                        # If content doesn't start with body, add it
+                                        if '<body' not in accumulated_content:
+                                            yield '<body>'
+                                    yield_started = True
+                                
                                 yield content_piece
                                 
                             except json.JSONDecodeError as e:
@@ -215,21 +269,47 @@ class ExpenseAdvisor:
                                 continue
                             except Exception as e:
                                 logger.error(f"Error processing stream chunk: {str(e)}")
-                                yield f"\n[Streaming Error]: {str(e)}\n"
+                                if not yield_started:
+                                    yield f"<body><h3>Error</h3><p>Streaming Error: {str(e)}</p></body>"
+                                    yield_started = True
+                                else:
+                                    yield f"\n<p><em>Streaming Error: {str(e)}</em></p>"
+                        
+                        # Ensure proper closure
+                        if yield_started and not accumulated_content.rstrip().endswith('</body>'):
+                            yield "</body>"
+                        elif not yield_started:
+                            yield "<body><h3>No Content</h3><p>No content was received from the AI service</p></body>"
                         
                         logger.info(f"Streaming completed. Total chunks: {chunk_count}")
                                 
+                    except requests.exceptions.Timeout as e:
+                        error_msg = f"Request timeout - the AI service took too long to respond: {str(e)}"
+                        logger.error(error_msg)
+                        if not yield_started:
+                            yield f"<body><h3>Timeout Error</h3><p>{error_msg}</p></body>"
+                        else:
+                            yield f"\n<p><em>Connection timed out</em></p></body>"
                     except requests.exceptions.ConnectionError as e:
                         error_msg = f"Connection error - unable to reach the AI service: {str(e)}"
                         logger.error(error_msg)
-                        yield f"<body><h3>Connection Error</h3><p>{error_msg}</p></body>"
+                        if not yield_started:
+                            yield f"<body><h3>Connection Error</h3><p>{error_msg}</p></body>"
+                        else:
+                            yield f"\n<p><em>Connection lost</em></p></body>"
                     except Exception as e:
                         error_msg = f"Unexpected error: {str(e)}"
                         logger.error(error_msg)
-                        yield f"<body><h3>Error</h3><p>{error_msg}</p></body>"
+                        if not yield_started:
+                            yield f"<body><h3>Error</h3><p>{error_msg}</p></body>"
+                        else:
+                            yield f"\n<p><em>Unexpected error occurred</em></p></body>"
                     finally:
                         if response:
-                            response.close()
+                            try:
+                                response.close()
+                            except:
+                                pass
                         gc.collect()
                 
                 return stream_response()
@@ -256,7 +336,12 @@ class ExpenseAdvisor:
                 payload = {
                     "model": self.model_name,
                     "messages": messages,
-                    "stream": False 
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.7,
+                        "top_p": 0.9,
+                        "num_predict": 2048
+                    }
                 }
                 
                 session = self.get_session()
@@ -264,7 +349,8 @@ class ExpenseAdvisor:
                 logger.info("Sending non-streaming request...")
                 response = session.post(
                     self.ollama_url, 
-                    json=payload
+                    json=payload,
+                    timeout=(30, 120)  # (connect_timeout, read_timeout)
                 )
                 
                 logger.info(f"Non-streaming response status: {response.status_code}")
@@ -286,10 +372,16 @@ class ExpenseAdvisor:
                     logger.info(f"Generated advice length: {len(full_content)} characters")
                     return full_content
                 else:
-                    error_msg = f"API Error: {response.status_code} - {response.text}"
+                    error_msg = f"API Error: {response.status_code}"
+                    if response.text:
+                        error_msg += f" - {response.text[:200]}"
                     logger.error(error_msg)
                     return f"<body><h3>Error</h3><p>{error_msg}</p></body>"
                     
+            except requests.exceptions.Timeout as e:
+                error_msg = f"Request timeout - the AI service took too long to respond: {str(e)}"
+                logger.error(error_msg)
+                return f"<body><h3>Timeout Error</h3><p>{error_msg}</p></body>"
             except requests.exceptions.ConnectionError as e:
                 error_msg = f"Connection error - unable to reach the AI service: {str(e)}"
                 logger.error(error_msg)
@@ -302,4 +394,7 @@ class ExpenseAdvisor:
     def __del__(self):
         """Cleanup when object is destroyed"""
         if hasattr(self, 'session') and self.session:
-            self.session.close()
+            try:
+                self.session.close()
+            except:
+                pass
