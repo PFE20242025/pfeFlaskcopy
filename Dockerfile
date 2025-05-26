@@ -17,5 +17,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Expose Flask port and Ollama API port
 EXPOSE 5000 
 
-# Start Ollama server in background, then launch Flask app with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+# Version simple avec timeout long
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--timeout", "1800", "--keep-alive", "300", "app:app"]
