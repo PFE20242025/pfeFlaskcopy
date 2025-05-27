@@ -337,7 +337,7 @@ def predict_expense(income, bedrooms, vehicles, members, employed):
             return jsonify({"error": "Income must be a number"}), 400
         
         # Validate other parameters
-        if bedrooms < 0 or vehicles < 0 or members < 0 or employed not in [0, 1]:
+        if bedrooms < 0 or vehicles < 0 or members < 0 or employed < 0 :
             return jsonify({"error": "Invalid parameter values"}), 400
             
         # Get model and scaler
