@@ -126,14 +126,14 @@ class ExpenseAdvisor:
             raise
     
     def generate_advice_stream(self, expenses, language="english", tone="formal"):
-        """Generate streaming advice - Fixed for Azure Container Apps with better error handling"""
+        """Generate streaming advice - Version corrigée pour éviter les réponses vides"""
         logger.info(f"Generating streaming advice with language: {language}, tone: {tone}")
         
-        # Test connection first
+        # Test de connexion obligatoire
         if not self.test_connection():
             logger.error("Connection test failed before streaming")
             def error_response():
-                yield f"<body><h3>Connection Error</h3><p>Unable to connect to AI service</p></body>"
+                yield f"<body><h3>Connection Error</h3><p>Unable to connect to AI service at {self.ollama_url}</p></body>"
             return error_response()
         
         with self.cleanup_context():
@@ -147,7 +147,8 @@ class ExpenseAdvisor:
                     "options": {
                         "temperature": 0.7,
                         "top_p": 0.9,
-                        "num_predict": 2048  # Limit response length to prevent timeouts
+                        "num_predict": 2048,
+                        "stop": ["</body>"]  # Arrêter à la fin du body
                     }
                 }
                 
@@ -160,17 +161,19 @@ class ExpenseAdvisor:
                     chunk_count = 0
                     accumulated_content = ""
                     last_activity_time = time.time()
-                    timeout_threshold = 120  # 2 minutes timeout
+                    timeout_threshold = 180  # 3 minutes timeout
+                    body_started = False
+                    content_generated = False
                     
                     try:
-                        logger.info("Starting streaming request...")
+                        logger.info(f"Starting streaming request to {self.ollama_url}")
                         
-                        # Use longer timeout and chunk size for Azure
+                        # Requête avec timeouts adaptés
                         response = session.post(
                             self.ollama_url, 
                             json=payload, 
                             stream=True,
-                            timeout=(30, 120),  # (connect_timeout, read_timeout)
+                            timeout=(30, 180),  # Timeouts plus longs
                             headers={'Connection': 'keep-alive'}
                         )
                         
@@ -178,132 +181,159 @@ class ExpenseAdvisor:
                         
                         if response.status_code != 200:
                             error_msg = f"API Error: {response.status_code}"
-                            if response.text:
-                                error_msg += f" - {response.text[:200]}"
+                            try:
+                                error_details = response.text[:500]
+                                if error_details:
+                                    error_msg += f" - {error_details}"
+                            except:
+                                pass
                             logger.error(error_msg)
-                            yield f"<body><h3>Error</h3><p>{error_msg}</p></body>"
+                            yield f"<body><h3>API Error</h3><p>{error_msg}</p></body>"
                             return
                         
-                        # Start with opening body tag if not present
-                        yield_started = False
+                        # Buffer pour accumuler les chunks incomplets
+                        buffer = ""
                         
-                        for line in response.iter_lines(decode_unicode=True, chunk_size=1024):
+                        for line in response.iter_lines(decode_unicode=True, chunk_size=512):
                             current_time = time.time()
                             
-                            # Check for timeout
+                            # Vérifier le timeout
                             if current_time - last_activity_time > timeout_threshold:
                                 logger.warning("Stream timeout detected")
-                                if not yield_started:
-                                    yield f"<body><h3>Timeout</h3><p>Response generation timed out</p></body>"
+                                if not content_generated:
+                                    yield f"<body><h3>Timeout</h3><p>Response generation timed out after {timeout_threshold} seconds</p></body>"
                                 else:
-                                    yield f"\n<p><em>Response generation timed out</em></p></body>"
+                                    yield f"\n<p><em>Response timed out</em></p></body>"
                                 break
                             
-                            if not line:
+                            if not line or not line.strip():
                                 continue
                             
                             last_activity_time = current_time
                             chunk_count += 1
                             
-                            # Log progress every 20 chunks
-                            if chunk_count % 20 == 0:
-                                logger.info(f"Processed {chunk_count} chunks")
+                            # Log de progression
+                            if chunk_count % 10 == 0:
+                                logger.debug(f"Processed {chunk_count} chunks")
                                 
                             try:
+                                # Decoder si nécessaire
                                 if isinstance(line, bytes):
-                                    line = line.decode('utf-8')
-                                    
-                                chunk = json.loads(line)
+                                    line = line.decode('utf-8', errors='ignore')
+                                
+                                # Ajouter au buffer
+                                buffer += line
+                                
+                                # Essayer de parser le JSON
+                                try:
+                                    chunk = json.loads(buffer)
+                                    buffer = ""  # Reset buffer si parsing réussi
+                                except json.JSONDecodeError:
+                                    # Si on ne peut pas parser, continuer à accumuler
+                                    if len(buffer) > 10000:  # Limite pour éviter les buffers trop grands
+                                        logger.warning("Buffer too large, resetting")
+                                        buffer = ""
+                                    continue
+                                
+                                # Traiter le chunk
                                 content_piece = chunk.get('message', {}).get('content', '')
                                 
-                                # Check if stream is done
+                                # Vérifier si le stream est terminé
                                 if chunk.get('done', False):
-                                    logger.info("Stream marked as done by server")
-                                    if not yield_started:
-                                        yield f"<body><h3>Error</h3><p>No content received</p></body>"
-                                    else:
-                                        # Ensure proper closing
-                                        if not accumulated_content.rstrip().endswith('</body>'):
-                                            yield "</body>"
+                                    logger.info(f"Stream completed by server after {chunk_count} chunks")
+                                    if not content_generated:
+                                        yield f"<body><h3>No Content</h3><p>AI service completed but generated no content</p></body>"
+                                    elif not accumulated_content.rstrip().endswith('</body>'):
+                                        yield "</body>"
                                     break
                                 
                                 if not content_piece:
                                     continue
                                 
-                                # Handle think blocks
+                                # Filtrer les blocs de réflexion
                                 if "<think>" in content_piece:
                                     inside_think_block = True
-                                    continue
+                                    content_piece = content_piece.split("<think>")[0]
                                 if "</think>" in content_piece:
                                     inside_think_block = False
-                                    continue
+                                    parts = content_piece.split("</think>")
+                                    content_piece = parts[-1] if len(parts) > 1 else ""
                                 if inside_think_block:
                                     continue
                                 
-                                # Clean first chunk
+                                # Nettoyer le premier chunk
                                 if not first_chunk_skipped:
                                     content_piece = content_piece.lstrip()
                                     if content_piece.startswith('```html'):
                                         content_piece = content_piece.replace('```html', '', 1).lstrip()
+                                    elif content_piece.startswith('```'):
+                                        content_piece = content_piece.replace('```', '', 1).lstrip()
                                     first_chunk_skipped = True
                                 
-                                # Clean ending markdown
-                                if content_piece.endswith('```'):
-                                    content_piece = content_piece.rstrip('```').rstrip()
+                                # Nettoyer les marqueurs de fin
+                                content_piece = content_piece.replace('```', '')
                                 
-                                # Accumulate content for tracking
+                                # Accumuler le contenu
                                 accumulated_content += content_piece
                                 
-                                # Ensure we start with body tag
-                                if not yield_started and content_piece.strip():
+                                # S'assurer qu'on commence par un body tag
+                                if not body_started and content_piece.strip():
                                     if not content_piece.startswith('<body'):
-                                        # If content doesn't start with body, add it
                                         if '<body' not in accumulated_content:
                                             yield '<body>'
-                                    yield_started = True
+                                            body_started = True
+                                    else:
+                                        body_started = True
+                                    content_generated = True
                                 
-                                yield content_piece
-                                
+                                # Yielder le contenu si on a du contenu valide
+                                if content_piece.strip():
+                                    content_generated = True
+                                    yield content_piece
+                                    
                             except json.JSONDecodeError as e:
-                                logger.warning(f"JSON decode error in stream: {str(e)}")
+                                logger.debug(f"JSON decode error (buffering): {str(e)}")
                                 continue
                             except Exception as e:
                                 logger.error(f"Error processing stream chunk: {str(e)}")
-                                if not yield_started:
-                                    yield f"<body><h3>Error</h3><p>Streaming Error: {str(e)}</p></body>"
-                                    yield_started = True
-                                else:
-                                    yield f"\n<p><em>Streaming Error: {str(e)}</em></p>"
+                                if not content_generated:
+                                    yield f"<body><h3>Processing Error</h3><p>Error processing stream: {str(e)}</p></body>"
+                                    content_generated = True
+                                continue
                         
-                        # Ensure proper closure
-                        if yield_started and not accumulated_content.rstrip().endswith('</body>'):
-                            yield "</body>"
-                        elif not yield_started:
-                            yield "<body><h3>No Content</h3><p>No content was received from the AI service</p></body>"
-                        
-                        logger.info(f"Streaming completed. Total chunks: {chunk_count}")
+                        # Finaliser la réponse
+                        if content_generated:
+                            if not accumulated_content.rstrip().endswith('</body>'):
+                                yield "</body>"
+                            logger.info(f"Stream completed successfully with {chunk_count} chunks")
+                        else:
+                            logger.warning("No content was generated during streaming")
+                            yield "<body><h3>Empty Response</h3><p>No content was generated by the AI service</p></body>"
                                 
                     except requests.exceptions.Timeout as e:
-                        error_msg = f"Request timeout - the AI service took too long to respond: {str(e)}"
+                        error_msg = f"Request timeout after 3 minutes: {str(e)}"
                         logger.error(error_msg)
-                        if not yield_started:
+                        if not content_generated:
                             yield f"<body><h3>Timeout Error</h3><p>{error_msg}</p></body>"
                         else:
                             yield f"\n<p><em>Connection timed out</em></p></body>"
+                            
                     except requests.exceptions.ConnectionError as e:
-                        error_msg = f"Connection error - unable to reach the AI service: {str(e)}"
+                        error_msg = f"Connection error to {self.ollama_url}: {str(e)}"
                         logger.error(error_msg)
-                        if not yield_started:
+                        if not content_generated:
                             yield f"<body><h3>Connection Error</h3><p>{error_msg}</p></body>"
                         else:
                             yield f"\n<p><em>Connection lost</em></p></body>"
+                            
                     except Exception as e:
-                        error_msg = f"Unexpected error: {str(e)}"
-                        logger.error(error_msg)
-                        if not yield_started:
-                            yield f"<body><h3>Error</h3><p>{error_msg}</p></body>"
+                        error_msg = f"Unexpected streaming error: {str(e)}"
+                        logger.error(error_msg, exc_info=True)
+                        if not content_generated:
+                            yield f"<body><h3>Streaming Error</h3><p>{error_msg}</p></body>"
                         else:
                             yield f"\n<p><em>Unexpected error occurred</em></p></body>"
+                            
                     finally:
                         if response:
                             try:
@@ -315,10 +345,42 @@ class ExpenseAdvisor:
                 return stream_response()
                 
             except Exception as e:
-                logger.error(f"Error in generate_advice_stream: {str(e)}")
+                logger.error(f"Error initializing stream: {str(e)}", exc_info=True)
                 def error_response():
-                    yield f"<body><h3>Error</h3><p>Failed to generate advice: {str(e)}</p></body>"
+                    yield f"<body><h3>Initialization Error</h3><p>Failed to initialize advice stream: {str(e)}</p></body>"
                 return error_response()
+
+    def test_connection(self):
+        try:
+            session = self.get_session()
+            
+            # Test avec l'endpoint tags d'abord
+            test_url = self.ollama_url.replace('/api/chat', '/api/tags')
+            logger.info(f"Testing connection to {test_url}")
+            
+            response = session.get(test_url, timeout=10)
+            logger.info(f"Tags endpoint test: {response.status_code}")
+            
+            if response.status_code == 200:
+                return True
+            
+            # Si tags ne marche pas, tester avec un petit message
+            test_payload = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": False,
+                "options": {"num_predict": 1}
+            }
+            
+            logger.info(f"Testing chat endpoint {self.ollama_url}")
+            response = session.post(self.ollama_url, json=test_payload, timeout=15)
+            logger.info(f"Chat endpoint test: {response.status_code}")
+            
+            return response.status_code == 200
+            
+        except Exception as e:
+            logger.error(f"Connection test failed: {str(e)}")
+            return False
     
     def generate_advice(self, expenses, language="english", tone="formal"):
         """Generate non-streaming advice - Azure Container Compatible"""
